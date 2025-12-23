@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flappy Bird: Pixel Edition</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Teko:wght@600&display=swap');
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #333;
+            touch-action: none; 
+            font-family: 'Teko', sans-serif;
+        }
+        canvas {
+            display: block;
+            /* This is the magic line that keeps pixels sharp */
+            image-rendering: pixelated; 
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    
+    // Disable smoothing to get that crisp pixel look
+    ctx.imageSmoothingEnabled = false;
+
+    // --- CONFIG ---
+    let frames = 0;
+    let score = 0;
+    let highScore = localStorage.getItem('flappyHighScore') || 0;
+    let state = 'START'; 
+    let gameSpeed = 3; 
+
+    // --- RESIZE LOGIC ---
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        ground.y = canvas.height - 112; 
+        bgCity.init();
+        if (state === 'START') {
+            bird.y = canvas.height / 2 - 50;
+        }
+    }
+    window.addEventListener('resize', resize);
+
+    // --- PIXEL ART BIRD DEFINITION ---
+    // 0 = Transparent, 1 = Black (Outline), 2 = Yellow, 3 = White, 4 = Orange
+    const birdSprite = [
+        [0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
+        [0,0,0,0,1,1,2,2,2,2,1,3,1,0,0,0,0],
+        [0,0,0,1,2,2,2,2,2,1,3,3,3,1,0,0,0],
+        [0,0,1,2,2,2,2,2,2,1,3,3,3,1,0,0,0],
+        [0,0,1,2,2,2,2,2,2,1,3,1,3,1,0,0,0], // The "1" in the middle is the pupil
+        [0,0,1,2,2,2,2,2,2,1,1,1,1,1,0,0,0],
+        [0,0,1,2,2,2,2,2,2,1,4,4,4,4,1,0,0],
+        [0,0,0,1,2,2,2,2,1,4,4,4,4,4,1,0,0],
+        [0,0,0,0,1,1,1,1,1,1,4,4,4,4,1,0,0],
+        [0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,0,0]
+    ];
+    
+    const palette = {
+        1: "#000000", // Outline
+        2: "#f4bc2c", // Yellow Body
+        3: "#ffffff", // White Eye
+        4: "#e65612"  // Orange Beak
+    };
+
+    const bird = {
+        x: 60,
+        y: 150,
+        width: 34,
+        height: 24,
+        velocity: 0,
+        gravity: 0.25,
+        jump: -4.6,
+        rotation: 0,
+        
+        draw: function() {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            
+            // Rotation
+            let targetRot = (this.velocity * 0.12);
+            this.rotation = Math.min(Math.PI / 4, Math.max(-Math.PI / 4, targetRot));
+            ctx.rotate(this.rotation);
+
+            // PIXEL DRAWING LOOP
+            let pixelSize = 3; // Size of each "pixel" block
+            // Center the sprite
+            let offsetX = -(birdSprite[0].length * pixelSize) / 2;
+            let offsetY = -(birdSprite.length * pixelSize) / 2;
+
+            for(let r=0; r<birdSprite.length; r++) {
+                for(let c=0; c<birdSprite[r].length; c++) {
+                    let colorCode = birdSprite[r][c];
+                    if (colorCode !== 0) {
+                        ctx.fillStyle = palette[colorCode];
+                        ctx.fillRect(offsetX + (c * pixelSize), offsetY + (r * pixelSize), pixelSize, pixelSize);
+                    }
+                }
+            }
+            
+            // Add a simple white wing on top (hardcoded for speed)
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(offsetX + (4*pixelSize), offsetY + (4*pixelSize), 4*pixelSize, 3*pixelSize);
+            ctx.fillStyle = "#000"; // Wing outline
+            ctx.strokeRect(offsetX + (4*pixelSize), offsetY + (4*pixelSize), 4*pixelSize, 3*pixelSize);
+
+            ctx.restore();
+        },
+        
+        update: function() {
+            this.velocity += this.gravity;
+            this.y += this.velocity;
+            
+            if (this.y + 12 >= ground.y) {
+                this.y = ground.y - 12;
+                gameOver();
+            }
+            if (this.y < 0) {
+                this.y = 0;
+                this.velocity = 0;
+            }
+        },
+        flap: function() {
+            this.velocity = this.jump;
+        }
+    };
+
+    // --- BACKGROUND CITY (Official Mint) ---
+    const bgCity = {
+        buildings: [],
+        init: function() {
+            this.buildings = [];
+            let currentX = 0;
+            while(currentX < canvas.width + 200) {
+                this.addBuilding(currentX);
+                currentX += this.buildings[this.buildings.length-1].w;
+            }
+        },
+        addBuilding: function(x) {
+            let w = 30 + Math.random() * 50;
+            let h = 50 + Math.random() * 150; 
+            let type = Math.random() > 0.5 ? 1 : 0; 
+            this.buildings.push({ x: x, w: w, h: h, type: type });
+        },
+        update: function() {
+            let speed = gameSpeed * 0.2; 
+            this.buildings.forEach(b => b.x -= speed);
+            if (this.buildings[0].x + this.buildings[0].w < 0) {
+                let first = this.buildings.shift();
+                let lastX = this.buildings[this.buildings.length - 1].x;
+                let lastW = this.buildings[this.buildings.length - 1].w;
+                this.addBuilding(lastX + lastW);
+            }
+        },
+        draw: function() {
+            // "Pixelated" look for city: Turn off anti-aliasing for shapes
+            ctx.fillStyle = "#a3e8cc"; // Mint
+            this.buildings.forEach(b => {
+                let y = ground.y - b.h;
+                ctx.fillRect(b.x, y, b.w, b.h);
+                // Highlight
+                ctx.fillStyle = "#bbf2da";
+                ctx.fillRect(b.x, y, b.w, 4);
+                // Windows
+                ctx.fillStyle = "#7ecbb6";
+                if (b.type === 0) {
+                    for(let wx = b.x + 5; wx < b.x + b.w - 5; wx += 10) {
+                        for(let wy = y + 10; wy < ground.y - 5; wy += 15) ctx.fillRect(wx, wy, 4, 8);
+                    }
+                } else {
+                    for(let wy = y + 10; wy < ground.y - 5; wy += 12) ctx.fillRect(b.x + 4, wy, b.w - 8, 4);
+                }
+                ctx.fillStyle = "#a3e8cc"; // reset
+                ctx.strokeStyle = "#7ecbb6";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(b.x, y, b.w, b.h);
+            });
+        }
+    };
+
+    const ground = {
+        y: 0,
+        height: 112,
+        offsetX: 0,
+        draw: function() {
+            // Beige Top
+            ctx.fillStyle = "#ded895";
+            ctx.fillRect(0, this.y, canvas.width, this.height);
+            // Grass
+            ctx.fillStyle = "#73bf2e";
+            ctx.fillRect(0, this.y, canvas.width, 16);
+            ctx.fillStyle = "#000";
+            // Black lines
+            ctx.fillRect(0, this.y, canvas.width, 2);
+            ctx.fillRect(0, this.y + 16, canvas.width, 2);
+
+            // Pattern
+            ctx.save();
+            ctx.beginPath();
+            ctx.strokeStyle = "#d0c983"; 
+            ctx.lineWidth = 3;
+            let spacing = 20;
+            let start = - (this.offsetX % spacing);
+            for(let i = start - spacing; i < canvas.width + spacing; i += spacing) {
+                ctx.moveTo(i, this.y + 18);
+                ctx.lineTo(i - 12, this.height + this.y);
+            }
+            ctx.stroke();
+            ctx.restore();
+        },
+        update: function() {
+            this.offsetX = (this.offsetX + gameSpeed);
+        }
+    };
+
+    const pipes = {
+        items: [],
+        width: 52,
+        gap: 150, 
+        dx: gameSpeed,
+        lastY: 0, 
+
+        draw: function() {
+            for (let i = 0; i < this.items.length; i++) {
+                let p = this.items[i];
+                let bottomY = p.y + this.gap;
+                
+                ctx.fillStyle = "#73bf2e";
+                ctx.strokeStyle = "#000";
+                ctx.lineWidth = 2;
+
+                // TOP
+                ctx.fillRect(p.x, -50, this.width, p.y + 50); 
+                ctx.strokeRect(p.x, -50, this.width, p.y + 50);
+                // TOP CAP
+                ctx.fillRect(p.x - 2, p.y - 24, this.width + 4, 24);
+                ctx.strokeRect(p.x - 2, p.y - 24, this.width + 4, 24);
+
+                // BOTTOM
+                ctx.fillRect(p.x, bottomY, this.width, ground.y - bottomY);
+                ctx.strokeRect(p.x, bottomY, this.width, ground.y - bottomY);
+                // BOTTOM CAP
+                ctx.fillRect(p.x - 2, bottomY, this.width + 4, 24);
+                ctx.strokeRect(p.x - 2, bottomY, this.width + 4, 24);
+                
+                // HIGHLIGHTS
+                ctx.fillStyle = "#a5e268";
+                ctx.fillRect(p.x + 4, 0, 4, p.y - 24); 
+                ctx.fillRect(p.x + 4, bottomY + 24, 4, ground.y - bottomY - 24);
+                ctx.fillRect(p.x + 2, p.y - 24 + 2, 2, 20);
+                ctx.fillRect(p.x + 2, bottomY + 2, 2, 20);
+            }
+        },
+        
+        update: function() {
+            if (this.items.length === 0 || canvas.width - this.items[this.items.length - 1].x >= 220) {
+                let minPipe = 80;
+                let maxPipe = ground.y - minPipe - this.gap;
+                let y;
+                if (this.items.length === 0) y = maxPipe / 2;
+                else {
+                    let maxJump = 200; 
+                    let minReachable = this.lastY - maxJump;
+                    let maxReachable = this.lastY + maxJump;
+                    let safeMin = Math.max(minPipe, minReachable);
+                    let safeMax = Math.min(maxPipe, maxReachable);
+                    y = Math.floor(Math.random() * (safeMax - safeMin + 1) + safeMin);
+                }
+                this.lastY = y; 
+                this.items.push({ x: canvas.width, y: y, passed: false });
+            }
+
+            for (let i = 0; i < this.items.length; i++) {
+                let p = this.items[i];
+                p.x -= this.dx;
+
+                // Hitbox
+                let bLeft = bird.x - 10;
+                let bRight = bird.x + 10;
+                let bTop = bird.y - 8;
+                let bBottom = bird.y + 8;
+
+                if (bRight > p.x && bLeft < p.x + this.width) {
+                    if (bTop < p.y || bBottom > p.y + this.gap) gameOver();
+                }
+                if (p.x + this.width < bird.x && !p.passed) {
+                    score++;
+                    p.passed = true;
+                }
+                if (p.x + this.width < -50) {
+                    this.items.shift();
+                    i--;
+                }
+            }
+        },
+        reset: function() {
+            this.items = [];
+        }
+    };
+
+    // --- GAME ENGINE ---
+    function drawScore() {
+        ctx.fillStyle = "white";
+        ctx.strokeStyle = "black";
+        ctx.lineWidth = 3;
+        ctx.textAlign = "center";
+        
+        if (state === 'PLAYING') {
+            ctx.font = "bold 60px Teko";
+            ctx.strokeText(score, canvas.width/2, 100);
+            ctx.fillText(score, canvas.width/2, 100);
+        } else if (state === 'GAMEOVER') {
+            let boxW = 220, boxH = 140;
+            let boxX = canvas.width/2 - boxW/2, boxY = canvas.height/2 - 70;
+            ctx.fillStyle = "#ded895";
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+            ctx.lineWidth = 3;
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+            
+            ctx.fillStyle = "#e65612";
+            ctx.font = "bold 30px Teko";
+            ctx.fillText("SCORE", boxX + boxW/2, boxY + 35);
+            ctx.fillStyle = "white";
+            ctx.strokeText(score, boxX + boxW/2, boxY + 65);
+            ctx.fillText(score, boxX + boxW/2, boxY + 65);
+            
+            ctx.fillStyle = "#e65612";
+            ctx.fillText("BEST", boxX + boxW/2, boxY + 95);
+            ctx.fillStyle = "white";
+            ctx.strokeText(highScore, boxX + boxW/2, boxY + 125);
+            ctx.fillText(highScore, boxX + boxW/2, boxY + 125);
+
+            ctx.font = "bold 50px Teko";
+            ctx.lineWidth = 4;
+            ctx.strokeText("GAME OVER", canvas.width/2, boxY - 30);
+            ctx.fillText("GAME OVER", canvas.width/2, boxY - 30);
+        } else if (state === 'START') {
+            ctx.font = "bold 60px Teko";
+            ctx.strokeText("FLAPPY BIRD", canvas.width/2, canvas.height/2 - 80);
+            ctx.fillText("FLAPPY BIRD", canvas.width/2, canvas.height/2 - 80);
+            ctx.font = "30px Teko";
+            ctx.strokeText("Tap to Start", canvas.width/2, canvas.height/2 + 20);
+            ctx.fillText("Tap to Start", canvas.width/2, canvas.height/2 + 20);
+        }
+    }
+
+    function gameOver() {
+        state = 'GAMEOVER';
+        if (score > highScore) {
+            highScore = score;
+            localStorage.setItem('flappyHighScore', highScore);
+        }
+    }
+
+    function reset() {
+        bird.y = canvas.height/2;
+        bird.velocity = 0;
+        bird.rotation = 0;
+        score = 0;
+        pipes.reset();
+        frames = 0;
+        state = 'START';
+    }
+
+    function loop() {
+        ctx.fillStyle = "#70c5ce";
+        ctx.fillRect(0, 0, canvas.width, canvas.height); // Sky
+
+        if (state !== 'GAMEOVER') bgCity.update();
+        bgCity.draw();
+
+        if (state === 'PLAYING') {
+            pipes.update();
+            bird.update();
+            ground.update();
+            pipes.draw();
+        } else if (state === 'START') {
+            ground.update();
+            bgCity.update();
+            bird.y = (canvas.height/2 - 50) + Math.sin(Date.now() / 200) * 10;
+        } else if (state === 'GAMEOVER') {
+            pipes.draw();
+        }
+
+        ground.draw();
+        bird.draw();
+        drawScore();
+
+        requestAnimationFrame(loop);
+    }
+
+    function action(e) {
+        if (e.type === 'keydown' && e.code !== 'Space') return;
+        if (e.type === 'keydown') e.preventDefault();
+        if (state === 'START') { state = 'PLAYING'; bird.flap(); }
+        else if (state === 'PLAYING') bird.flap();
+        else if (state === 'GAMEOVER') reset();
+    }
+
+    window.addEventListener('keydown', action);
+    window.addEventListener('touchstart', action);
+    window.addEventListener('mousedown', action);
+
+    resize();
+    bgCity.init();
+    reset();
+    loop();
+
+</script>
+</body>
+</html>
