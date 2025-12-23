@@ -1,1 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flappy Bird: Fullscreen Edition</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Teko:wght@600&display=swap');
 
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #333;
+            touch-action: none; /* Critical for mobile playability */
+            font-family: 'Teko', sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // --- CONFIG ---
+    let frames = 0;
+    let score = 0;
+    let highScore = localStorage.getItem('flappyHighScore') || 0;
+    let state = 'START'; // START, PLAYING, GAMEOVER
+    let gameSpeed = 3; 
+
+    // --- RESIZE LOGIC ---
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // Ground is always near bottom
+        ground.y = canvas.height - 112; 
+        
+        // Regenerate city to fill new width
+        bgCity.init();
+
+        if (state === 'START') {
+            bird.y = canvas.height / 2 - 50;
+        }
+    }
+    window.addEventListener('resize', resize);
+
+    // --- ASSETS (Procedural) ---
+
+    const bird = {
+        x: 60,
+        y: 150,
+        width: 34,
+        height: 24,
+        velocity: 0,
+        gravity: 0.25,
+        jump: -4.6,
+        rotation: 0,
+        
+        draw: function() {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            
+            // Rotation: rapid snap up, slow rotation down
+            let targetRot = (this.velocity * 0.12);
+            this.rotation = Math.min(Math.PI / 4, Math.max(-Math.PI / 4, targetRot));
+            ctx.rotate(this.rotation);
+
+            // -- The "Official" Style Construction --
+            
+            // 1. Outline (Black) - Drawn slightly larger behind everything
+            ctx.fillStyle = "#000";
+            // Rough shape approximation for outline
+            ctx.beginPath();
+            ctx.ellipse(0, 0, 18, 13, 0, 0, Math.PI*2);
+            ctx.fill();
+
+            // 2. Body (Yellow #f8e759)
+            ctx.fillStyle = "#f8e759";
+            ctx.beginPath();
+            ctx.ellipse(0, 0, 16, 11, 0, 0, Math.PI*2);
+            ctx.fill();
+
+            // 3. Eye (Big White Circle with Outline)
+            ctx.fillStyle = "#000"; // Eye outline
+            ctx.beginPath();
+            ctx.arc(6, -6, 9, 0, Math.PI*2);
+            ctx.fill();
+            
+            ctx.fillStyle = "#fff"; // Eye white
+            ctx.beginPath();
+            ctx.arc(6, -6, 7, 0, Math.PI*2);
+            ctx.fill();
+            
+            ctx.fillStyle = "#000"; // Pupil (Square-ish)
+            ctx.fillRect(8, -6, 2, 2); 
+
+            // 4. Beak (Orange Lips)
+            // Top Lip
+            ctx.fillStyle = "#f45524";
+            ctx.beginPath();
+            ctx.roundRect(4, 2, 16, 10, 4); // Main beak shape
+            ctx.fill();
+            
+            // Black split line
+            ctx.fillStyle = "#000";
+            ctx.fillRect(4, 7, 16, 2);
+            
+            // 5. Wing (White Blob)
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.ellipse(-6, 3, 10, 6, 0, 0, Math.PI*2);
+            ctx.fill();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = "#000";
+            ctx.stroke();
+
+            ctx.restore();
+        },
+        
+        update: function() {
+            this.velocity += this.gravity;
+            this.y += this.velocity;
+
+            // Floor check
+            if (this.y + 12 >= ground.y) {
+                this.y = ground.y - 12;
+                gameOver();
+            }
+            // Ceiling check
+            if (this.y < 0) {
+                this.y = 0;
+                this.velocity = 0;
+            }
+        },
+        flap: function() {
+            this.velocity = this.jump;
+        }
+    };
+
+    // --- BACKGROUND CITY (The "Official" Mint Skyline) ---
+    const bgCity = {
+        buildings: [],
+        color: "#64e0db", // The specific sky cyan is handled in drawBG
+        buildingColor: "#a3e8cc", // Mint green city color
+        highlight: "#bbf2da", // Lighter top edge
+        
+        init: function() {
+            this.buildings = [];
+            let currentX = 0;
+            // Fill screen + buffer
+            while(currentX < canvas.width + 200) {
+                this.addBuilding(currentX);
+                currentX += this.buildings[this.buildings.length-1].w;
+            }
+        },
+
+        addBuilding: function(x) {
+            let w = 30 + Math.random() * 50;
+            let h = 50 + Math.random() * 100; // Height relative to ground
+            // Type determines window pattern
+            let type = Math.random() > 0.5 ? 1 : 0; 
+            this.buildings.push({ x: x, w: w, h: h, type: type });
+        },
+
+        update: function() {
+            // Parallax: Move slower than pipes (0.5 vs 3)
+            let speed = gameSpeed * 0.2; 
+            
+            this.buildings.forEach(b => {
+                b.x -= speed;
+            });
+
+            // Remove offscreen
+            if (this.buildings[0].x + this.buildings[0].w < 0) {
+                let first = this.buildings.shift();
+                // Add new one at the end
+                let lastX = this.buildings[this.buildings.length - 1].x;
+                let lastW = this.buildings[this.buildings.length - 1].w;
+                this.addBuilding(lastX + lastW);
+            }
+        },
+
+        draw: function() {
+            ctx.fillStyle = this.buildingColor;
+            
+            this.buildings.forEach(b => {
+                let y = ground.y - b.h;
+                
+                // Main building body
+                ctx.fillRect(b.x, y, b.w, b.h);
+                
+                // Lighter top edge (simulates 3D/lighting)
+                ctx.fillStyle = this.highlight;
+                ctx.fillRect(b.x, y, b.w, 4);
+                
+                // Windows (Darker mint)
+                ctx.fillStyle = "#7ecbb6";
+                if (b.type === 0) {
+                    // Grid windows
+                    for(let wx = b.x + 5; wx < b.x + b.w - 5; wx += 10) {
+                        for(let wy = y + 10; wy < ground.y - 5; wy += 15) {
+                            ctx.fillRect(wx, wy, 4, 8);
+                        }
+                    }
+                } else {
+                    // Horizontal lines
+                    for(let wy = y + 10; wy < ground.y - 5; wy += 12) {
+                        ctx.fillRect(b.x + 4, wy, b.w - 8, 4);
+                    }
+                }
+                
+                // Reset color for next block body
+                ctx.fillStyle = this.buildingColor;
+                
+                // Border between buildings
+                ctx.strokeStyle = "#7ecbb6";
+                ctx.lineWidth = 1;
+                ctx.strokeRect(b.x, y, b.w, b.h);
+            });
+        }
+    };
+
+    const ground = {
+        y: 0,
+        height: 112,
+        offsetX: 0,
+        draw: function() {
+            // 1. Top Border
+            ctx.fillStyle = "#ded895"; // Beige
+            ctx.fillRect(0, this.y, canvas.width, this.height);
+            
+            // 2. Grass Line
+            ctx.fillStyle = "#73bf2e";
+            ctx.fillRect(0, this.y, canvas.width, 16);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = "#000";
+            ctx.beginPath();
+            ctx.moveTo(0, this.y);
+            ctx.lineTo(canvas.width, this.y);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(0, this.y + 16);
+            ctx.lineTo(canvas.width, this.y + 16);
+            ctx.stroke();
+
+            // 3. Diagonal Pattern
+            ctx.save();
+            ctx.beginPath();
+            ctx.strokeStyle = "#d0c983"; // Darker beige
+            ctx.lineWidth = 3;
+            
+            // Optimization: Only draw visible lines
+            let spacing = 20;
+            let start = - (this.offsetX % spacing);
+            
+            for(let i = start - spacing; i < canvas.width + spacing; i += spacing) {
+                // Slope logic
+                ctx.moveTo(i, this.y + 18);
+                ctx.lineTo(i - 12, this.height + this.y);
+            }
+            ctx.stroke();
+            ctx.restore();
+        },
+        update: function() {
+            this.offsetX = (this.offsetX + gameSpeed);
+        }
+    };
+
+    const pipes = {
+        items: [],
+        width: 52,
+        gap: 150, 
+        dx: gameSpeed,
+        lastY: 0, 
+
+        draw: function() {
+            for (let i = 0; i < this.items.length; i++) {
+                let p = this.items[i];
+                let bottomY = p.y + this.gap;
+                
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = "#000"; 
+                ctx.fillStyle = "#73bf2e"; // Classic Pipe Green
+
+                // --- TOP PIPE ---
+                ctx.fillRect(p.x, -50, this.width, p.y + 50); // Extend up offscreen
+                ctx.strokeRect(p.x, -50, this.width, p.y + 50);
+                
+                // Cap
+                ctx.fillRect(p.x - 2, p.y - 24, this.width + 4, 24);
+                ctx.strokeRect(p.x - 2, p.y - 24, this.width + 4, 24);
+
+                // --- BOTTOM PIPE ---
+                ctx.fillRect(p.x, bottomY, this.width, ground.y - bottomY);
+                ctx.strokeRect(p.x, bottomY, this.width, ground.y - bottomY);
+
+                // Cap
+                ctx.fillRect(p.x - 2, bottomY, this.width + 4, 24);
+                ctx.strokeRect(p.x - 2, bottomY, this.width + 4, 24);
+                
+                // --- HIGHLIGHTS (The "Shininess") ---
+                ctx.fillStyle = "#a5e268"; // Lighter highlight
+                // Top Highlight strip
+                ctx.fillRect(p.x + 4, 0, 4, p.y - 24); 
+                // Bottom Highlight strip
+                ctx.fillRect(p.x + 4, bottomY + 24, 4, ground.y - bottomY - 24);
+                // Cap highlights
+                ctx.fillRect(p.x + 2, p.y - 24 + 2, 2, 20);
+                ctx.fillRect(p.x + 2, bottomY + 2, 2, 20);
+            }
+        },
+        
+        update: function() {
+            // Spawn distance logic (works on any screen width)
+            // Spawn a pipe every 220 pixels of horizontal travel
+            if (this.items.length === 0 || canvas.width - this.items[this.items.length - 1].x >= 220) {
+                
+                let minPipe = 80;
+                let maxPipe = ground.y - minPipe - this.gap;
+                
+                // The "Possibility" Algorithm
+                let y;
+                if (this.items.length === 0) {
+                    y = maxPipe / 2;
+                } else {
+                    let maxJump = 200; 
+                    let minReachable = this.lastY - maxJump;
+                    let maxReachable = this.lastY + maxJump;
+                    let safeMin = Math.max(minPipe, minReachable);
+                    let safeMax = Math.min(maxPipe, maxReachable);
+                    y = Math.floor(Math.random() * (safeMax - safeMin + 1) + safeMin);
+                }
+                
+                this.lastY = y; 
+
+                this.items.push({
+                    x: canvas.width,
+                    y: y,
+                    passed: false
+                });
+            }
+
+            for (let i = 0; i < this.items.length; i++) {
+                let p = this.items[i];
+                p.x -= this.dx;
+
+                // Collision Logic (AABB with slight forgiveness)
+                let bLeft = bird.x - 10;
+                let bRight = bird.x + 10;
+                let bTop = bird.y - 8;
+                let bBottom = bird.y + 8;
+
+                if (bRight > p.x && bLeft < p.x + this.width) {
+                    if (bTop < p.y || bBottom > p.y + this.gap) {
+                        gameOver();
+                    }
+                }
+
+                if (p.x + this.width < bird.x && !p.passed) {
+                    score++;
+                    p.passed = true;
+                }
+
+                if (p.x + this.width < -50) {
+                    this.items.shift();
+                    i--;
+                }
+            }
+        },
+        reset: function() {
+            this.items = [];
+        }
+    };
+
+    // --- MAIN ENGINE ---
+
+    function drawBackground() {
+        // Sky Color (Official Cyan)
+        ctx.fillStyle = "#70c5ce";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function drawScore() {
+        ctx.fillStyle = "white";
+        ctx.strokeStyle = "black";
+        ctx.lineWidth = 3;
+        ctx.textAlign = "center";
+        
+        if (state === 'PLAYING') {
+            ctx.font = "bold 60px Teko";
+            ctx.strokeText(score, canvas.width/2, 100);
+            ctx.fillText(score, canvas.width/2, 100);
+        } else if (state === 'GAMEOVER') {
+            // Simple overlay for Game Over
+            let boxW = 220;
+            let boxH = 140;
+            let boxX = canvas.width/2 - boxW/2;
+            let boxY = canvas.height/2 - 70;
+            
+            // Draw Box
+            ctx.fillStyle = "#ded895";
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+            ctx.lineWidth = 3;
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+            
+            // Text
+            ctx.fillStyle = "#e65612";
+            ctx.font = "bold 30px Teko";
+            ctx.fillText("SCORE", boxX + boxW/2, boxY + 35);
+            ctx.fillStyle = "white";
+            ctx.strokeStyle = "black";
+            ctx.strokeText(score, boxX + boxW/2, boxY + 65);
+            ctx.fillText(score, boxX + boxW/2, boxY + 65);
+            
+            ctx.fillStyle = "#e65612";
+            ctx.fillText("BEST", boxX + boxW/2, boxY + 95);
+            ctx.fillStyle = "white";
+            ctx.strokeText(highScore, boxX + boxW/2, boxY + 125);
+            ctx.fillText(highScore, boxX + boxW/2, boxY + 125);
+
+            // Big Game Over
+            ctx.font = "bold 50px Teko";
+            ctx.lineWidth = 4;
+            ctx.strokeText("GAME OVER", canvas.width/2, boxY - 30);
+            ctx.fillText("GAME OVER", canvas.width/2, boxY - 30);
+        } else if (state === 'START') {
+            ctx.font = "bold 60px Teko";
+            ctx.strokeText("FLAPPY BIRD", canvas.width/2, canvas.height/2 - 80);
+            ctx.fillText("FLAPPY BIRD", canvas.width/2, canvas.height/2 - 80);
+            
+            ctx.font = "30px Teko";
+            ctx.strokeText("Tap to Start", canvas.width/2, canvas.height/2 + 20);
+            ctx.fillText("Tap to Start", canvas.width/2, canvas.height/2 + 20);
+        }
+    }
+
+    function gameOver() {
+        state = 'GAMEOVER';
+        if (score > highScore) {
+            highScore = score;
+            localStorage.setItem('flappyHighScore', highScore);
+        }
+    }
+
+    function reset() {
+        bird.y = canvas.height/2;
+        bird.velocity = 0;
+        bird.rotation = 0;
+        score = 0;
+        pipes.reset();
+        frames = 0;
+        state = 'START';
+    }
+
+    function loop() {
+        // 1. Draw Static BG (Sky)
+        drawBackground();
+
+        // 2. Update & Draw City (Parallax)
+        if (state !== 'GAMEOVER') bgCity.update();
+        bgCity.draw();
+
+        // 3. Game State Logic
+        if (state === 'PLAYING') {
+            pipes.update();
+            bird.update();
+            ground.update();
+            pipes.draw(); // Pipes behind ground
+        } else if (state === 'START') {
+            ground.update();
+            bgCity.update();
+            // Bobbing animation
+            bird.y = (canvas.height/2 - 50) + Math.sin(Date.now() / 200) * 10;
+        } else if (state === 'GAMEOVER') {
+            pipes.draw();
+        }
+
+        // 4. Draw Foreground (Ground -> Bird -> UI)
+        ground.draw();
+        bird.draw();
+        drawScore();
+
+        requestAnimationFrame(loop);
+    }
+
+    // --- CONTROLS ---
+    function action(e) {
+        if (e.type === 'keydown' && e.code !== 'Space') return;
+        if (e.type === 'keydown') e.preventDefault();
+
+        if (state === 'START') {
+            state = 'PLAYING';
+            bird.flap();
+        } else if (state === 'PLAYING') {
+            bird.flap();
+        } else if (state === 'GAMEOVER') {
+            reset();
+        }
+    }
+
+    window.addEventListener('keydown', action);
+    window.addEventListener('touchstart', action);
+    window.addEventListener('mousedown', action);
+
+    // --- INIT ---
+    resize();
+    bgCity.init(); // Initialize buildings
+    reset();
+    loop();
+
+</script>
+</body>
+</html>
